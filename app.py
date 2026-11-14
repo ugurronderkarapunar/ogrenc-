@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
+import os
 from sklearn.base import BaseEstimator, TransformerMixin
 
 # --- 1. ÖZEL FEATURE ENGINEER SINIFI (Modelin çalışması için zorunludur) ---
@@ -28,16 +29,21 @@ st.set_page_config(
 st.title("🎓 Öğrenci Başarı ve Risk Tahmin Paneli")
 st.markdown("Bu uygulama, öğrenci verilerini analiz ederek **Geçme / Kalma** durumunu yapay zeka (Soft Voting) modeliyle tahmin eder.")
 
+MODEL_DOSYASI = 'ogrenci_basari_model_ultralight.pkl'
+
 @st.cache_resource
 def model_yukle():
-    # Kaydettiğimiz model dosyasının adı
-    paket = joblib.load('ogrenci_basari_production_model.pkl')
+    if not os.path.exists(MODEL_DOSYASI):
+        st.error(f"⚠️ '{MODEL_DOSYASI}' dosyası bulunamadı! Lütfen ultra hafif model dosyasını GitHub reposuna eklediğinizden emin olun.")
+        st.stop()
+    
+    paket = joblib.load(MODEL_DOSYASI)
     return paket['model'], paket['threshold']
 
 try:
     model, threshold = model_yukle()
 except Exception as e:
-    st.error(f"Model dosyası ('ogrenci_basari_production_model.pkl') yüklenemedi! Lütfen model dosyasını GitHub reposuna eklediğinizden emin olun. Hata: {e}")
+    st.error(f"Model yüklenirken bir hata oluştu: {e}")
     st.stop()
 
 # --- 3. KULLANICI GİRDİLERİ (SIDEBAR & FORM) ---
@@ -53,7 +59,6 @@ gunluk_uyku_saati = st.sidebar.slider("Günlük Uyku Saati", 0.0, 12.0, 7.0)
 ders_disi_aktivite_saati = st.sidebar.slider("Ders Dışı Aktivite Saati", 0.0, 10.0, 2.0)
 alttan_ders_sayisi = st.sidebar.number_input("Alttan Alınan Ders Sayısı", 0, 10, 0)
 
-# Modelin beklediği temel sözlük yapısı
 giris_verisi = {
     'vize_puani': vize_puani,
     'quiz_puani': quiz_puani,
@@ -71,7 +76,6 @@ if st.button("🚀 Başarı Durumunu Tahmin Et", type="primary"):
     df_input = pd.DataFrame([giris_verisi])
     
     try:
-        # Olasılık tahmini (1: Kaldı sınıfı)
         proba = model.predict_proba(df_input)[:, 1][0]
         karar = 1 if proba >= threshold else 0
         
