@@ -35,29 +35,22 @@ st.set_page_config(
 )
 
 st.title("🎓 Öğrenci Başarı ve Risk Tahmin Paneli")
-st.markdown("Bu uygulama, yüklenen öğrenci veri setini analiz ederek Soft Voting modelini dinamik olarak eğitir ve **Geçme / Kalma** durumunu tahmin eder.")
+st.markdown("Bu uygulama, yüklenen Excel veri setini analiz ederek Soft Voting modelini eğitir ve **Geçme / Kalma** durumunu tahmin eder.")
 
 # --- 3. DOSYA YÜKLEME VE MODEL EĞİTME BÖLÜMÜ ---
 st.sidebar.header("📁 Veri Seti Yükleme")
-uploaded_file = st.sidebar.file_uploader("Veri setinizi yükleyin (.xlsx, .xls, .csv)", type=["xlsx", "xls", "csv"])
+uploaded_file = st.sidebar.file_uploader("Excel veri setinizi yükleyin (.xlsx)", type=["xlsx", "xls"])
 
 @st.cache_resource
 def modeli_egit(file_source):
-    with st.spinner("🔄 Model eğitiliyor, lütfen bekleyin..."):
+    with st.spinner("🔄 Excel dosyası okunuyor ve model eğitiliyor, lütfen bekleyin..."):
         try:
-            if hasattr(file_source, 'name') and file_source.name.endswith('.csv'):
-                df = pd.read_csv(file_source)
-            elif hasattr(file_source, 'name') and file_source.name.endswith('.xls'):
-                df = pd.read_excel(file_source, engine='xlrd')
-            else:
-                try:
-                    df = pd.read_excel(file_source)
-                except Exception:
-                    if hasattr(file_source, 'seek'):
-                        file_source.seek(0)
-                    df = pd.read_csv(file_source)
+            # Bellek imlecini başa alıp doğrudan Excel olarak oku
+            if hasattr(file_source, 'seek'):
+                file_source.seek(0)
+            df = pd.read_excel(file_source, engine='openpyxl')
         except Exception as e:
-            st.error(f"Dosya okunurken hata oluştu! Hata detayı: {e}")
+            st.error(f"Excel dosyası okunurken hata oluştu! Lütfen geçerli bir .xlsx dosyası yükleyin. Hata detayı: {e}")
             st.stop()
         
         LEAKAGE_COLS = ['final_puani', 'genel_basari_yuzdesi', 'harf_notu']
@@ -107,13 +100,13 @@ def modeli_egit(file_source):
 # Dosya kontrolü ve yükleme
 if uploaded_file is not None:
     model, threshold = modeli_egit(uploaded_file)
-    st.sidebar.success("✅ Veri başarıyla yüklendi ve model hazır!")
+    st.sidebar.success("✅ Excel dosyası başarıyla yüklendi ve model hazır!")
 else:
     varsayilan_dosya = "duzenlenmis_ogrenci_verisi.xlsx"
     if os.path.exists(varsayilan_dosya):
         model, threshold = modeli_egit(varsayilan_dosya)
     else:
-        st.warning("⚠️ Lütfen sol menüden veri setinizi (`.xlsx` veya `.csv`) yükleyin!")
+        st.warning("⚠️ Lütfen sol menüden Excel veri setinizi (`duzenlenmis_ogrenci_verisi.xlsx`) yükleyin!")
         st.stop()
 
 # --- 4. KULLANICI GİRDİLERİ (SIDEBAR & FORM) ---
