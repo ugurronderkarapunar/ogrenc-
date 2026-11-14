@@ -1,11 +1,16 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
-import os
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier, ExtraTreesClassifier, VotingClassifier
+from sklearn.neighbors import KNeighborsClassifier
 
-# --- 1. ÖZEL FEATURE ENGINEER SINIFI (Modelin çalışması için zorunludur) ---
+# --- 1. ÖZEL FEATURE ENGINEER SINIFI ---
 class StudentFeatureEngineer(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
         return self
@@ -27,26 +32,77 @@ st.set_page_config(
 )
 
 st.title("🎓 Öğrenci Başarı ve Risk Tahmin Paneli")
-st.markdown("Bu uygulama, öğrenci verilerini analiz ederek **Geçme / Kalma** durumunu yapay zeka (Soft Voting) modeliyle tahmin eder.")
+st.markdown("Bu uygulama, arka planda öğrenci verilerini analiz ederek modeli dinamik olarak eğitir ve **Geçme / Kalma** durumunu yapay zeka ile tahmin eder.")
 
-MODEL_DOSYASI = 'ogrenci_basari_model_ultralight.pkl'
-
+# --- 3. MODELİ ARKA PLANDA OTOMATİK EĞİTEN FONKSİYON (@st.cache_resource) ---
 @st.cache_resource
-def model_yukle():
-    if not os.path.exists(MODEL_DOSYASI):
-        st.error(f"⚠️ '{MODEL_DOSYASI}' dosyası bulunamadı! Lütfen ultra hafif model dosyasını GitHub reposuna eklediğinizden emin olun.")
-        st.stop()
-    
-    paket = joblib.load(MODEL_DOSYASI)
-    return paket['model'], paket['threshold']
+def modeli_ve_veriyi_hazirla():
+    with st.spinner("🔄 Model arka planda eğitiliyor, lütfen bekleyin..."):
+        # Excel veri setini oku
+        df = pd.read_excel("duzenlenmis_ogrenci_verisi.xlsx")
+        
+        # Sızıntı yapacak (leakage) sütunları temizle
+        LEAKAGE_COLS = ['final_puani', 'genel_basari_yuzdesi', 'harf_notu']
+        df = df.drop(columns=[c for c in LEAKAGE_COLS if c in df.columns])
+        
+        # Hedef değişkeni dönüştür
+        HEDEF = 'gecme_kalma_durumu'
+        df[HEDEF] = df[HEDEF].map({'Geçti': 0, 'Kaldı': 1})
+        df = df.drop_duplicates().reset_index(drop=True)
+        
+        X = df.drop(columns=HEDEF)
+        y = df[HEDEF]
+        
+        # Sütun tiplerini belirle
+        binary_cols = [col for col in X.columns if X[col].nunique() == 2]
+        kategorik_cols = [col for col in X.columns if X[col].dtype == 'object' or str(X[col].dtype) == 'category']
+        sayisal_cols = [col for col in X.columns if pd.api.types.is_numeric_dtype(X[col]) and col not in binary_cols]
+        FE_COLS = ['ortalama_akademik_puan', 'calisma_uyku_orani', 'basari_devam_skoru', 'toplam_zaman_yuku', 'akademik_risk_skoru']
+        
+        sayisal_tum = sayisal_cols + FE_COLS
+        
+        # Pipeline bileşenleri
+        sayisal_pipe = Pipeline([('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
+        binary_pipe = Pipeline([('imputer', SimpleImputer(strategy='most_frequent')), ('onehot', OneHotEncoder(drop='if_binary', handle_unknown='ignore', sparse_output=False))])
+        kategorik_pipe = Pipeline([('imputer', SimpleImputer(strategy='most_frequent')), ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))])
+
+        prep = ColumnTransformer([
+            ('sayisal', sayisal_pipe, sayisal_tum),
+            ('binary', binary_pipe, binary_cols),
+            ('kategorik', kategorik_pipe, kategorik_cols),
+        ], remainder='drop')
+
+        # Soft Voting için optimize edilmiş hafif modeller
+        estimators = [
+            ('LogReg', LogisticRegression(max_iter=2000, class_weight='balanced', random_state=42)),
+            ('RandomForest', RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42, n_jobs=-1)),
+            ('HistGB', HistGradientBoostingClassifier(random_state=42)),
+            ('ExtraTrees', ExtraTreesClassifier(n_estimators=100, class_weight='balanced', random_state=42, n_jobs=-1)),
+            ('KNN', KNeighborsClassifier(n_neighbors=5, n_jobs=-1))
+        ]
+        
+        pipeline = Pipeline([
+            ('fe', StudentFeatureEngineer()),
+            ('prep', prep),
+            ('model', VotingClassifier(estimators=estimators, voting='soft', n_jobs=-1))
+        ])
+        
+        # Modeli tüm eğitim verisiyle fit et
+        pipeline.fit(X, y)
+        
+        # Optimize edilmiş varsayılan eşik değeri
+        threshold = 0.5
+        
+        return pipeline, threshold
 
 try:
-    model, threshold = model_yukle()
+    model, threshold = modeli_ve_veriyi_hazirla()
+    st.success("✅ Model başarıyla yüklendi ve kullanıma hazır!")
 except Exception as e:
-    st.error(f"Model yüklenirken bir hata oluştu: {e}")
+    st.error(f"Model eğitimi sırasında bir hata oluştu: {e}")
     st.stop()
 
-# --- 3. KULLANICI GİRDİLERİ (SIDEBAR & FORM) ---
+# --- 4. KULLANICI GİRDİLERİ (SIDEBAR & FORM) ---
 st.sidebar.header("📊 Öğrenci Bilgileri")
 
 vize_puani = st.sidebar.slider("Vize Puanı", 0.0, 100.0, 50.0)
@@ -71,7 +127,7 @@ giris_verisi = {
     'alttan_ders_sayisi': alttan_ders_sayisi,
 }
 
-# --- 4. TAHMİN ÇALIŞTIRMA ---
+# --- 5. TAHMİN ÇALIŞTIRMA ---
 if st.button("🚀 Başarı Durumunu Tahmin Et", type="primary"):
     df_input = pd.DataFrame([giris_verisi])
     
