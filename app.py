@@ -1,19 +1,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import joblib
 import os
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import (
-    RandomForestClassifier, HistGradientBoostingClassifier, ExtraTreesClassifier, VotingClassifier
-)
-from sklearn.neighbors import KNeighborsClassifier
 
-# --- 1. ÖZEL FEATURE ENGINEER SINIFI ---
+# --- 1. ÖZEL FEATURE ENGINEER SINIFI (Modelin çalışması için zorunludur) ---
 class StudentFeatureEngineer(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
         return self
@@ -35,83 +27,34 @@ st.set_page_config(
 )
 
 st.title("🎓 Öğrenci Başarı ve Risk Tahmin Paneli")
-st.markdown("Bu uygulama, yüklenen Excel veri setini analiz ederek Soft Voting modelini eğitir ve **Geçme / Kalma** durumunu tahmin eder.")
+st.markdown("Bu uygulama, eğitilmiş yapay zeka modeliyle öğrenci verilerini analiz ederek **Geçme / Kalma** durumunu anında tahmin eder.")
 
-# --- 3. DOSYA YÜKLEME VE MODEL EĞİTME BÖLÜMÜ ---
-st.sidebar.header("📁 Veri Seti Yükleme")
-uploaded_file = st.sidebar.file_uploader("Excel veri setinizi yükleyin (.xlsx)", type=["xlsx", "xls"])
+# Model dosya adı (Eğitim scriptinizde kaydedilen isim)
+MODEL_DOSYASI = 'ogrenci_basari_production_model.pkl'
 
 @st.cache_resource
-def modeli_egit(file_source):
-    with st.spinner("🔄 Excel dosyası okunuyor ve model eğitiliyor, lütfen bekleyin..."):
-        try:
-            # Bellek imlecini başa alıp doğrudan Excel olarak oku
-            if hasattr(file_source, 'seek'):
-                file_source.seek(0)
-            df = pd.read_excel(file_source, engine='openpyxl')
-        except Exception as e:
-            st.error(f"Excel dosyası okunurken hata oluştu! Lütfen geçerli bir .xlsx dosyası yükleyin. Hata detayı: {e}")
-            st.stop()
+def model_yukle():
+    if not os.path.exists(MODEL_DOSYASI):
+        # Eğer alternatif olarak 'yeni_ogrenci.pkl' kaydedildiyse onu kontrol et
+        if os.path.exists('yeni_ogrenci.pkl'):
+            return joblib.load('yeni_ogrenci.pkl')['model'], joblib.load('yeni_ogrenci.pkl')['threshold']
         
-        LEAKAGE_COLS = ['final_puani', 'genel_basari_yuzdesi', 'harf_notu']
-        df = df.drop(columns=[c for c in LEAKAGE_COLS if c in df.columns])
-        
-        HEDEF = 'gecme_kalma_durumu'
-        df[HEDEF] = df[HEDEF].map({'Geçti': 0, 'Kaldı': 1})
-        df = df.drop_duplicates().reset_index(drop=True)
-        
-        X = df.drop(columns=HEDEF)
-        y = df[HEDEF]
-        
-        binary_cols = [col for col in X.columns if X[col].nunique() == 2]
-        kategorik_cols = [col for col in X.columns if X[col].dtype == 'object' or str(X[col].dtype) == 'category']
-        sayisal_cols = [col for col in X.columns if pd.api.types.is_numeric_dtype(X[col]) and col not in binary_cols]
-        FE_COLS = ['ortalama_akademik_puan', 'calisma_uyku_orani', 'basari_devam_skoru', 'toplam_zaman_yuku', 'akademik_risk_skoru']
-        
-        sayisal_tum = sayisal_cols + FE_COLS
-        
-        sayisal_pipe = Pipeline([('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
-        binary_pipe = Pipeline([('imputer', SimpleImputer(strategy='most_frequent')), ('onehot', OneHotEncoder(drop='if_binary', handle_unknown='ignore', sparse_output=False))])
-        kategorik_pipe = Pipeline([('imputer', SimpleImputer(strategy='most_frequent')), ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))])
-
-        prep = ColumnTransformer([
-            ('sayisal', sayisal_pipe, sayisal_tum),
-            ('binary', binary_pipe, binary_cols),
-            ('kategorik', kategorik_pipe, kategorik_cols),
-        ], remainder='drop')
-
-        estimators = [
-            ('LogReg', LogisticRegression(max_iter=2000, class_weight='balanced', random_state=42)),
-            ('RandomForest', RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42, n_jobs=-1)),
-            ('HistGB', HistGradientBoostingClassifier(random_state=42)),
-            ('ExtraTrees', ExtraTreesClassifier(n_estimators=100, class_weight='balanced', random_state=42, n_jobs=-1)),
-            ('KNN', KNeighborsClassifier(n_neighbors=5, n_jobs=-1))
-        ]
-        
-        pipeline = Pipeline([
-            ('fe', StudentFeatureEngineer()),
-            ('prep', prep),
-            ('model', VotingClassifier(estimators=estimators, voting='soft', n_jobs=-1))
-        ])
-        
-        pipeline.fit(X, y)
-        return pipeline, 0.5
-
-# Dosya kontrolü ve yükleme
-if uploaded_file is not None:
-    model, threshold = modeli_egit(uploaded_file)
-    st.sidebar.success("✅ Excel dosyası başarıyla yüklendi ve model hazır!")
-else:
-    varsayilan_dosya = "duzenlenmis_ogrenci_verisi.xlsx"
-    if os.path.exists(varsayilan_dosya):
-        model, threshold = modeli_egit(varsayilan_dosya)
-    else:
-        st.warning("⚠️ Lütfen sol menüden Excel veri setinizi (`duzenlenmis_ogrenci_verisi.xlsx`) yükleyin!")
+        st.error(f"⚠️ '{MODEL_DOSYASI}' dosyası bulunamadı! Lütfen model dosyasını `app.py` ile aynı klasöre ekleyin.")
         st.stop()
+    
+    paket = joblib.load(MODEL_DOSYASI)
+    return paket['model'], paket['threshold']
 
-# --- 4. KULLANICI GİRDİLERİ (SIDEBAR & FORM) ---
+try:
+    model, threshold = model_yukle()
+except Exception as e:
+    st.error(f"Model yüklenirken bir hata oluştu: {e}")
+    st.stop()
+
+# --- 3. KULLANICI GİRDİLERİ (SIDEBAR & FORM) ---
 st.sidebar.header("📊 Öğrenci Bilgileri")
 
+# Eğitim veri setindeki sütunlara uygun girdi bileşenleri
 vize_puani = st.sidebar.slider("Vize Puanı", 0.0, 100.0, 50.0)
 quiz_puani = st.sidebar.slider("Quiz Puanı", 0.0, 100.0, 50.0)
 odev_puani = st.sidebar.slider("Ödev Puanı", 0.0, 100.0, 50.0)
@@ -122,6 +65,7 @@ gunluk_uyku_saati = st.sidebar.slider("Günlük Uyku Saati", 0.0, 12.0, 7.0)
 ders_disi_aktivite_saati = st.sidebar.slider("Ders Dışı Aktivite Saati", 0.0, 10.0, 2.0)
 alttan_ders_sayisi = st.sidebar.number_input("Alttan Alınan Ders Sayısı", 0, 10, 0)
 
+# Modelin beklediği tüm değişkenleri sözlük yapısında topluyoruz
 giris_verisi = {
     'vize_puani': vize_puani,
     'quiz_puani': quiz_puani,
@@ -134,11 +78,12 @@ giris_verisi = {
     'alttan_ders_sayisi': alttan_ders_sayisi,
 }
 
-# --- 5. TAHMİN ÇALIŞTIRMA ---
+# --- 4. TAHMİN ÇALIŞTIRMA ---
 if st.button("🚀 Başarı Durumunu Tahmin Et", type="primary"):
     df_input = pd.DataFrame([giris_verisi])
     
     try:
+        # Model ile olasılık tahmini yap
         proba = model.predict_proba(df_input)[:, 1][0]
         karar = 1 if proba >= threshold else 0
         
