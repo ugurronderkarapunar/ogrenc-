@@ -1,13 +1,16 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier, ExtraTreesClassifier, VotingClassifier
+from sklearn.ensemble import (
+    RandomForestClassifier, HistGradientBoostingClassifier, ExtraTreesClassifier, VotingClassifier
+)
 from sklearn.neighbors import KNeighborsClassifier
 
 # --- 1. ÖZEL FEATURE ENGINEER SINIFI ---
@@ -24,7 +27,7 @@ class StudentFeatureEngineer(BaseEstimator, TransformerMixin):
         d['akademik_risk_skoru']    = d['alttan_ders_sayisi'] / d['onceki_ortalama'].replace(0, 0.1)
         return d.replace([np.inf, -np.inf], np.nan)
 
-# --- 2. STREAMLIT SAYFA YAPISI VE STİLİ ---
+# --- 2. STREAMLIT SAYFA YAPISI ---
 st.set_page_config(
     page_title="Öğrenci Başarı ve Risk Tahmin Sistemi",
     page_icon="🎓",
@@ -32,20 +35,34 @@ st.set_page_config(
 )
 
 st.title("🎓 Öğrenci Başarı ve Risk Tahmin Paneli")
-st.markdown("Bu uygulama, arka planda öğrenci verilerini analiz ederek modeli dinamik olarak eğitir ve **Geçme / Kalma** durumunu yapay zeka ile tahmin eder.")
+st.markdown("Bu uygulama, yüklenen öğrenci veri setini analiz ederek Soft Voting modelini dinamik olarak eğitir ve **Geçme / Kalma** durumunu tahmin eder.")
 
-# --- 3. MODELİ ARKA PLANDA OTOMATİK EĞİTEN FONKSİYON (@st.cache_resource) ---
+# --- 3. DOSYA YÜKLEME VE MODEL EĞİTME BÖLÜMÜ ---
+st.sidebar.header("📁 Veri Seti Yükleme")
+uploaded_file = st.sidebar.file_uploader("Veri setinizi yükleyin (.xlsx, .xls, .csv)", type=["xlsx", "xls", "csv"])
+
 @st.cache_resource
-def modeli_ve_veriyi_hazirla():
-    with st.spinner("🔄 Model arka planda eğitiliyor, lütfen bekleyin..."):
-        # Excel veri setini oku
-        df = pd.read_excel("duzenlenmis_ogrenci_verisi.xlsx")
+def modeli_egit(file_source):
+    with st.spinner("🔄 Model eğitiliyor, lütfen bekleyin..."):
+        try:
+            if hasattr(file_source, 'name') and file_source.name.endswith('.csv'):
+                df = pd.read_csv(file_source)
+            elif hasattr(file_source, 'name') and file_source.name.endswith('.xls'):
+                df = pd.read_excel(file_source, engine='xlrd')
+            else:
+                try:
+                    df = pd.read_excel(file_source)
+                except Exception:
+                    if hasattr(file_source, 'seek'):
+                        file_source.seek(0)
+                    df = pd.read_csv(file_source)
+        except Exception as e:
+            st.error(f"Dosya okunurken hata oluştu! Hata detayı: {e}")
+            st.stop()
         
-        # Sızıntı yapacak (leakage) sütunları temizle
         LEAKAGE_COLS = ['final_puani', 'genel_basari_yuzdesi', 'harf_notu']
         df = df.drop(columns=[c for c in LEAKAGE_COLS if c in df.columns])
         
-        # Hedef değişkeni dönüştür
         HEDEF = 'gecme_kalma_durumu'
         df[HEDEF] = df[HEDEF].map({'Geçti': 0, 'Kaldı': 1})
         df = df.drop_duplicates().reset_index(drop=True)
@@ -53,7 +70,6 @@ def modeli_ve_veriyi_hazirla():
         X = df.drop(columns=HEDEF)
         y = df[HEDEF]
         
-        # Sütun tiplerini belirle
         binary_cols = [col for col in X.columns if X[col].nunique() == 2]
         kategorik_cols = [col for col in X.columns if X[col].dtype == 'object' or str(X[col].dtype) == 'category']
         sayisal_cols = [col for col in X.columns if pd.api.types.is_numeric_dtype(X[col]) and col not in binary_cols]
@@ -61,7 +77,6 @@ def modeli_ve_veriyi_hazirla():
         
         sayisal_tum = sayisal_cols + FE_COLS
         
-        # Pipeline bileşenleri
         sayisal_pipe = Pipeline([('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
         binary_pipe = Pipeline([('imputer', SimpleImputer(strategy='most_frequent')), ('onehot', OneHotEncoder(drop='if_binary', handle_unknown='ignore', sparse_output=False))])
         kategorik_pipe = Pipeline([('imputer', SimpleImputer(strategy='most_frequent')), ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))])
@@ -72,7 +87,6 @@ def modeli_ve_veriyi_hazirla():
             ('kategorik', kategorik_pipe, kategorik_cols),
         ], remainder='drop')
 
-        # Soft Voting için optimize edilmiş hafif modeller
         estimators = [
             ('LogReg', LogisticRegression(max_iter=2000, class_weight='balanced', random_state=42)),
             ('RandomForest', RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42, n_jobs=-1)),
@@ -87,20 +101,20 @@ def modeli_ve_veriyi_hazirla():
             ('model', VotingClassifier(estimators=estimators, voting='soft', n_jobs=-1))
         ])
         
-        # Modeli tüm eğitim verisiyle fit et
         pipeline.fit(X, y)
-        
-        # Optimize edilmiş varsayılan eşik değeri
-        threshold = 0.5
-        
-        return pipeline, threshold
+        return pipeline, 0.5
 
-try:
-    model, threshold = modeli_ve_veriyi_hazirla()
-    st.success("✅ Model başarıyla yüklendi ve kullanıma hazır!")
-except Exception as e:
-    st.error(f"Model eğitimi sırasında bir hata oluştu: {e}")
-    st.stop()
+# Dosya kontrolü ve yükleme
+if uploaded_file is not None:
+    model, threshold = modeli_egit(uploaded_file)
+    st.sidebar.success("✅ Veri başarıyla yüklendi ve model hazır!")
+else:
+    varsayilan_dosya = "duzenlenmis_ogrenci_verisi.xlsx"
+    if os.path.exists(varsayilan_dosya):
+        model, threshold = modeli_egit(varsayilan_dosya)
+    else:
+        st.warning("⚠️ Lütfen sol menüden veri setinizi (`.xlsx` veya `.csv`) yükleyin!")
+        st.stop()
 
 # --- 4. KULLANICI GİRDİLERİ (SIDEBAR & FORM) ---
 st.sidebar.header("📊 Öğrenci Bilgileri")
