@@ -12,7 +12,7 @@ st.set_page_config(
 # Modeli, Eşik Değerini ve Model Adını Yükleme
 @st.cache_resource
 def model_yukle():
-    paket = joblib.load('ogrenci_basari_production_model.pkl')
+    paket = joblib.load('ogrenci_basari_production_model.pkl(2)')
     return paket['model'], paket['threshold'], paket.get('model_name', 'Optimizasyon Modeli')
 
 try:
