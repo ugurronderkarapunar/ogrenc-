@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import os
 import glob
-import joblib
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
@@ -38,7 +37,7 @@ class StudentFeatureEngineer(BaseEstimator, TransformerMixin):
         d['akademik_risk_skoru']    = d['alttan_ders_sayisi'] / d['onceki_ortalama'].replace(0, 0.1)
         return d.replace([np.inf, -np.inf], np.nan)
 
-# --- MODELİ VE VERİYİ YÜKLEME / EĞİTME ---
+# --- MODELİ VE VERİYİ YÜKLEME / EĞİTME (GÜVENLİ) ---
 @st.cache_resource
 def modeli_hazirla_ve_yukle():
     df = None
@@ -56,13 +55,15 @@ def modeli_hazirla_ve_yukle():
                         break
                     except:
                         continue
-            if df is not None:
+            if df is not None and not df.empty:
                 break
         except:
             continue
 
-    # Eğer dosya bulunamazsa sentetik veri üret
-    if df is None:
+    HEDEF = 'gecme_kalma_durumu'
+    
+    # Eğer gerçek veri dosyası bulunamadıysa veya hedef sütun yoksa sentetik veri üret
+    if df is None or df.empty or HEDEF not in df.columns:
         np.random.seed(42)
         n_samples = 500
         df = pd.DataFrame({
@@ -80,19 +81,19 @@ def modeli_hazirla_ve_yukle():
             'gecme_kalma_durumu': np.random.choice(['Geçti', 'Kaldı'], n_samples, p=[0.75, 0.25])
         })
 
-    HEDEF = 'gecme_kalma_durumu'
     LEAKAGE_COLS = ['final_puani', 'genel_basari_yuzdesi', 'harf_notu']
-    
     id_cols = [c for c in df.columns if 'id' in c.lower() or ('no' in c.lower() and c != HEDEF)]
     if id_cols:
         df = df.drop(columns=id_cols)
-    df = df.drop(columns=[c for c in LEAKAGE_COLS if c in df.columns])
     
-    # HEDEF KONTROLÜ VE KESİN DÖNÜŞÜM (0 ve 1)
+    existing_leakage = [c for c in LEAKAGE_COLS if c in df.columns]
+    if existing_leakage:
+        df = df.drop(columns=existing_leakage)
+    
+    # Hedef sütunu güvenli şekilde sayısal (0 ve 1) formata dönüştür
     if df[HEDEF].dtype == 'object' or str(df[HEDEF].dtype).name == 'category':
         df[HEDEF] = df[HEDEF].map({'Geçti': 0, 'Kaldı': 1})
     
-    # Eğer eşleşme sonrası NaN kaldıysa alternatif yazım denetimi yap
     df[HEDEF] = pd.to_numeric(df[HEDEF], errors='coerce')
     df = df.dropna(subset=[HEDEF])
 
