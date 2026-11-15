@@ -10,7 +10,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import precision_recall_curve
 
 # Sayfa Yapılandırması
@@ -38,21 +38,9 @@ class StudentFeatureEngineer(BaseEstimator, TransformerMixin):
         d['akademik_risk_skoru']    = d['alttan_ders_sayisi'] / d['onceki_ortalama'].replace(0, 0.1)
         return d.replace([np.inf, -np.inf], np.nan)
 
-# --- MODELİ VE VERİYİ YÜKLEME / EĞİTME (OTOMATİK YEDEKLİ) ---
+# --- MODELİ VE VERİYİ YÜKLEME / EĞİTME ---
 @st.cache_resource
 def modeli_hazirla_ve_yukle():
-    model_path = 'ogrenci_basari_production_model.pkl'
-    
-    # Eğer önceden kaydedilmiş model varsa direkt yükle
-    if os.path.exists(model_path):
-        try:
-            paket = joblib.load(model_path)
-            return paket['model'], paket['threshold'], paket.get('model_name', 'Optimizasyon Modeli')
-        except:
-            pass
-
-    # Model dosyası yoksa veya yüklenemediyse arka planda otomatik eğit
-    # Veri setini bulmaya çalış
     df = None
     tum_adaylar = glob.glob("**/*.xlsx", recursive=True) + glob.glob("**/*.csv", recursive=True)
     for dosya in tum_adaylar:
@@ -73,7 +61,7 @@ def modeli_hazirla_ve_yukle():
         except:
             continue
 
-    # Hiç dosya bulunamazsa sentetik veri üret
+    # Eğer dosya bulunamazsa sentetik veri üret
     if df is None:
         np.random.seed(42)
         n_samples = 500
@@ -92,19 +80,24 @@ def modeli_hazirla_ve_yukle():
             'gecme_kalma_durumu': np.random.choice(['Geçti', 'Kaldı'], n_samples, p=[0.75, 0.25])
         })
 
-    # Temizlik ve Hazırlık
     HEDEF = 'gecme_kalma_durumu'
     LEAKAGE_COLS = ['final_puani', 'genel_basari_yuzdesi', 'harf_notu']
+    
     id_cols = [c for c in df.columns if 'id' in c.lower() or ('no' in c.lower() and c != HEDEF)]
     if id_cols:
         df = df.drop(columns=id_cols)
     df = df.drop(columns=[c for c in LEAKAGE_COLS if c in df.columns])
     
-    if df[HEDEF].dtype == 'object':
+    # HEDEF KONTROLÜ VE KESİN DÖNÜŞÜM (0 ve 1)
+    if df[HEDEF].dtype == 'object' or str(df[HEDEF].dtype).name == 'category':
         df[HEDEF] = df[HEDEF].map({'Geçti': 0, 'Kaldı': 1})
+    
+    # Eğer eşleşme sonrası NaN kaldıysa alternatif yazım denetimi yap
+    df[HEDEF] = pd.to_numeric(df[HEDEF], errors='coerce')
+    df = df.dropna(subset=[HEDEF])
 
     X = df.drop(columns=HEDEF)
-    y = df[HEDEF]
+    y = df[HEDEF].astype(int)
 
     binary_cols, kategorik_cols, sayisal_cols = [], [], []
     for col in X.columns:
@@ -137,7 +130,6 @@ def modeli_hazirla_ve_yukle():
 
     model.fit(X, y)
     
-    # Eşik değeri belirleme
     y_proba = model.predict_proba(X)[:, 1]
     precisions, recalls, thresholds = precision_recall_curve(y, y_proba)
     f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-10)
