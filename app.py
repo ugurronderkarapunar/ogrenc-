@@ -9,24 +9,25 @@ st.set_page_config(
     layout="centered"
 )
 
-# Modeli ve Eşik Değerini Yükleme
+# Modeli, Eşik Değerini ve Model Adını Yükleme
 @st.cache_resource
 def model_yukle():
     paket = joblib.load('ogrenci_basari_production_model.pkl')
-    return paket['model'], paket['threshold']
+    return paket['model'], paket['threshold'], paket.get('model_name', 'Optimizasyon Modeli')
 
 try:
-    model, threshold = model_yukle()
+    model, threshold, model_name = model_yukle()
 except Exception as e:
     st.error(f"⚠️ Model dosyası ('ogrenci_basari_production_model.pkl') bulunamadı! Lütfen önce model eğitim kodunu çalıştırıp dosyayı dizine ekleyin.")
     st.stop()
 
 st.title("🎓 Öğrenci Başarı ve Risk Tahmin Asistanı")
-st.markdown("Aşağıdaki akademik ve kişisel bilgileri girerek öğrencinin **Geçme / Kalma** durumunu yapay zeka ile anlık tahmin edin.")
+st.markdown(f"**Aktif Yapay Zeka Modeli:** `{model_name}` (En yüksek F1 skoruna göre otomatik seçilmiştir)")
+st.markdown("Aşağıdaki akademik ve kişisel bilgileri girerek öğrencinin **Geçme / Kalma** durumunu anlık tahmin edin.")
 
 st.markdown("---")
 
-# Kullanıcıdan Girdi Alma Alanları (Sidebar veya Ana Ekran)
+# Kullanıcıdan Girdi Alma Alanları
 col1, col2 = st.columns(2)
 
 with col1:
@@ -48,7 +49,6 @@ st.markdown("---")
 
 # Tahmin Butonu
 if st.button("🔮 Başarı Durumunu Tahmin Et", use_container_width=True):
-    # Kullanıcı girdilerini sözlük olarak model formatına uygun hazırla
     ogrenci_verisi = {
         'vize_puani': vize_puani,
         'quiz_puani': quiz_puani,
@@ -76,9 +76,9 @@ if st.button("🔮 Başarı Durumunu Tahmin Et", use_container_width=True):
     with col_res1:
         st.metric(label="Kalma / Risk Olasılığı", value=f"%{proba*100:.1f}")
     with col_res2:
-        st.metric(label="Karar Eşiği", value=f"{threshold:.3f}")
+        st.metric(label="Optimal Karar Eşiği", value=f"{threshold:.3f}")
         
     if is_riskli:
-        st.error(f"🚨 **SONUÇ: Kaldı (Riskli Öğrenci)** — Öğrencinin kalma riski yüksek (Olasılık: %{proba*100:.1f}). Akademik danışmanlık önerilir.")
+        st.error(f"🚨 **SONUÇ: Kaldı (Riskli Öğrenci)** — Öğrencinin kalma riski yüksek (Olasılık: %{proba*100:.1f}). Akademik destek önerilir.")
     else:
         st.success(f"✅ **SONUÇ: Geçti (Başarılı)** — Öğrencinin dersi başarıyla geçmesi bekleniyor (Geçme Olasılığı: %{(1-proba)*100:.1f}).")
