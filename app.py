@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import os
 import glob
-import joblib
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
@@ -38,10 +37,11 @@ class StudentFeatureEngineer(BaseEstimator, TransformerMixin):
         d['akademik_risk_skoru']    = d['alttan_ders_sayisi'] / d['onceki_ortalama'].replace(0, 0.1)
         return d.replace([np.inf, -np.inf], np.nan)
 
-# --- MODELİ VE VERİYİ YÜKLEME / EĞİTME (GÜVENLİ VE OTOMATİK) ---
+# --- MODELİ VE VERİYİ YÜKLEME / EĞİTME (GÜVENLİ) ---
 @st.cache_resource
 def modeli_hazirla_ve_yukle():
     df = None
+    # Glob taraması string döner, .name hatasına yer bırakmaz
     tum_adaylar = glob.glob("**/*.xlsx", recursive=True) + glob.glob("**/*.csv", recursive=True)
     for dosya in tum_adaylar:
         if "sample_data" in dosya: 
@@ -137,7 +137,7 @@ def modeli_hazirla_ve_yukle():
     f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-10)
     best_threshold = thresholds[np.argmax(f1_scores)]
 
-    return model, best_threshold, "HistGradientBoosting (Canlı Otomatik Eğitim)"
+    return model, best_threshold, "HistGradientBoosting (Canlı Sistem)"
 
 model, threshold, model_name = modeli_hazirla_ve_yukle()
 
