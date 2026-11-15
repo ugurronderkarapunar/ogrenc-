@@ -1,11 +1,7 @@
 streamlit
 pandas
 numpy
-scikit-learn
-statsmodels
+scikit-learn==1.6.1
 joblib
-xgboost
-lightgbm
-matplotlib
-seaborn
+statsmodels
 openpyxl
